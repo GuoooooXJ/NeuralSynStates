@@ -19,9 +19,9 @@ function [varargout] = NeuralSynSWT(signal, fs, node, centralFreq, frequencyBand
 %   Modified : Dec 31, 2022
 
 basis = 'sym8';
-step  = round(1/centralFreq * fs);
+step  = round(0.02 * fs);
 winlen = round(1/centralFreq * fs * 4);
-windowTemp = winlen/fs;
+%windowTemp = winlen/fs;
 windowThrs = 1/centralFreq * 60;
 thrswin = round(1/centralFreq * fs * 60);
 
@@ -52,98 +52,67 @@ pro = progress('Neural State', N);
 
 [swa,swd] = swt(signal,layerNum,basis);
 
+%{
+mzero=zeros(size(swd));
+A=mzero;
+    %Reduction of the Approximate coefficients of the last layer
+A(layerNum,:)=iswt(swa,mzero,basis);
+
+    %Reduction of the Detail coefficients of every layer
+D=mzero;
+for i=1:layerNum
+   swcfs=mzero;
+   swcfs(i,:)=swd(i,:);
+   D(i,:)=iswt(mzero,swcfs,basis);
+end
+    %Reduction of the Approximate coefficients of every layer
+for i=1:layerNum-1
+    A(layerNum-i,:) = A(layerNum+1-i,:) + D(layerNum+1-i,:);
+end
+%}
+
+%{
+figure;
+kp = 0;
+for i = 1:layerNum
+subplot(layerNum,2,kp+1), plot(time,swa(i,:));
+title(['Approx. cfs level ',num2str(i)])
+xlim([1 5]);
+subplot(layerNum,2,kp+2), plot(time,swd(i,:));
+title(['Detail cfs level ',num2str(i)])
+xlim([1 5]);
+kp = kp + 2;
+end
+%}
+
 % Remove the points before and after to exclude edge effects
 DwithoutEdge = swd(:,fs:end-fs);
 AwithoutEdge = swa(:,fs:end-fs);
 
+
+
 % Compute wavelet pocket coefficients for priori window
 nStepThrs = ceil((thrswin-(winlen-step))/step);
 thrs  = zeros(1, nStepThrs);
-thrManuls = zeros(1, nStepThrs);
 sig   = zeros(1, nStepThrs);
 thrsel = zeros(1, nStepThrs);
-thrCal = zeros(1, nStepThrs);
 %cfsPriori = zeros(1, step*nStep);
 
-%{
-for iStep = 1:nStep
-    
-    idx = (1:step)+(iStep-1)*step;
-    
-    % Extract coefficients
-    cfsThrs = DwithoutEdge(FrequencyBand,(1:thrswin)+(iStep-1)*step);
-    %cfsTemp = cfsTemp(end-step+1:end);
-    
-    % Control chart
-    flag = 0;
-    ControlChartNumber = 0;
-    while(flag == 0)
-    ControlChartNumber = ControlChartNumber+1;
-    meancfsThrs  = mean(cfsThrs);
-    sigmacfsThrs = std(cfsThrs);
-    cfsThrsNew = cfsThrs(cfsThrs<meancfsThrs+2.58*sigmacfsThrs & cfsThrs>meancfsThrs-2.58*sigmacfsThrs);
-    % 1%-2.58 2%-2.33
-    
-    %{
-    tVectorPlot = (1:length(cfsThrs))./fs;
-    tVectorPlotNew = (1:length(cfsThrsNew))./fs;
-    figure;
-    plot(tVectorPlot,cfsThrs,'- -');hold on;
-    plot(tVectorPlotNew,cfsThrsNew);
-    hold off;
-    xlabel('Time'); % x轴注解
-    ylabel('Coefficients'); % y轴注解
-    title(['Before And After Control Chart in Progress ',num2str(ControlChartNumber),'time']); % 图形标题
-    legend('Before','After');
-    %}
-    if length(cfsThrsNew) == length(cfsThrs)
-        cfsThrs = cfsThrsNew;
-        flag = 1;
-    else
-        cfsThrs = cfsThrsNew;
-    end
-    
-    end
-
-    
-    cfsThrsNorm = zscore(cfsThrs);
-    sigma = median(abs(cfsThrsNorm))/0.6745;
-    thrManul   = sigma * (0.3936+0.1829*log(thrswin - 2));
-    thr        = sigma * thselect(cfsThrsNorm,'rigrsure') ;
-    thrs(idx)      = thr;
-    thrManuls(idx) = thrManul;
-    sig(idx)    = sigma;
-    thrsel(idx) = thselect(cfsThrsNorm,'rigrsure');
-    thrCal(idx) = (0.3936+0.1829*log(thrswin - 2));
-    
-    RandomSig = rand(size(cfsThrs))*2*thr-thr;
-    EnRandom  = sum(abs(RandomSig)*(1/fs));
-    Kr(iStep) = EnRandom/windowThrs;
-    
-    EnNorm      = 2*thr*winlen*(1/fs);
-    
-    
-    
-    
-    % Update progress bar
-    cont = cont+1;
-    pro = progress(pro, cont);
-end
-%}
 
 
 % Detect synchronization state
-startPoint = nStepThrs*step + 1;
-startPointMean = nStepThrs*step + 1;
-endPoint = startPoint + winlen - 1;
-nStep = floor((length(DwithoutEdge(FrequencyBand,:))-(startPoint-1)-(winlen-step))/step);
+startPointThrs = nStepThrs*step + 1;
+startPointTemp = ceil(nStepThrs*step/2) + 1;
+%startPoint = nStepThrs*step + 1;
+endPoint = startPointTemp + winlen - 1;
+%endPoint = startPoint + winlen - 1;
+nStep = floor((length(DwithoutEdge(FrequencyBand,:))-(startPointThrs-1)-(winlen-step))/step);
+%nStep = floor((length(DwithoutEdge(FrequencyBand,:))-(startPoint-1)-(winlen-step))/step);
 
 cfs = zeros(1, step*nStep);
 states = zeros(1, nStep);
 K1 = zeros(1, nStep);
-K0 = zeros(1, nStep);
 Kr = zeros(1, nStep);
-Ks = zeros(1, nStep);
 
 
 for iStep = 1:nStep
@@ -151,7 +120,8 @@ for iStep = 1:nStep
     idx = (1:step)+(iStep-1)*step;
 
     % Extract coefficients
-    cfsTemp = DwithoutEdge(FrequencyBand,(startPoint:endPoint)+(iStep-1)*step);
+    cfsTemp = DwithoutEdge(FrequencyBand,(startPointTemp:endPoint)+(iStep-1)*step);
+    %cfsTemp = DwithoutEdge(FrequencyBand,(startPoint:endPoint)+(iStep-1)*step);
     cfsThrs = DwithoutEdge(FrequencyBand,(1:thrswin)+(iStep-1)*step);
     cfs(idx) = cfsTemp(end-step+1:end);
     
@@ -172,7 +142,7 @@ for iStep = 1:nStep
     tVectorPlot = (1:length(cfsThrs))./fs;
     tVectorPlotNew = (1:length(cfsThrsNew))./fs;
     figure;
-    plot(tVectorPlot,cfsThrs,'- -');hold on;
+    plot(tVectorPlot,cfsThrs,'-');hold on;
     plot(tVectorPlotNew,cfsThrsNew);
     hold off;
     xlabel('Time'); % x轴注解
@@ -192,12 +162,12 @@ for iStep = 1:nStep
     cfsThrsNorm = zscore(cfsThrs);
     sigma = median(abs(cfsThrs))/0.6745;
     %thrManul   = sigma * (0.3936+0.1829*log(thrswin - 2));
-    thr        = mean(thrs(1:step*MeanStep)+(iStep-1)*step);
-    thrs(idx)      = sigma * thselect(cfsThrsNorm,'minimaxi');
+    thr        = sigma * (0.3936+0.1829*log(length(cfsThrsNorm) - 2));
+    thrs(idx)  = thr;
     %thrManuls(idx) = thrManul;
     sig(idx)    = sigma;
-    thrsel(idx) = thselect(cfsThrsNorm,'minimaxi');
-    %thrCal(idx) = (0.3936+0.1829*log(thrswin - 2));
+    %thrsel(idx) = thselect(cfsThrsNorm,'minimaxi');
+    thrsel(idx) = (0.3936+0.1829*log(length(cfsThrsNorm) - 2));
         
     % State discriminiation
     %{
@@ -216,16 +186,16 @@ for iStep = 1:nStep
     %}
     
     % State discriminiation
-    cfsTempHilbert  = hilbert(cfsTempCurrent);
+    cfsTempHilbert  = hilbert(cfsTemp);
     cfsTempEnvelop  = sqrt(real(cfsTempHilbert).^2 + imag(cfsTempHilbert).^2);
-    En        = sum(cfsTempEnvelop*(1/fs));
-    EnRandom  = 1/3*(thr).^2;
+    En        = sum(cfsTempEnvelop)*(1/fs);
+    EnNorm    = 0.288*2*thr*winlen*(1/fs);
+    %EnRandom  = 1/3*(thr.^2);%sum(sqrt(real(thr).^2 + imag(thr).^2)*(1/fs));
     
-    
-    Synstate = En/EnRandom;
+    Synstate = En/EnNorm;
     states(iStep) = 1-exp(-Synstate);
     K1(iStep) = En;
-    Kr(iStep) = EnRandom;
+    Kr(iStep) = EnNorm;
    
     % Update progress bar
     cont = cont+1;
@@ -234,90 +204,76 @@ end
 
 
 % Scale state arrary
-startPoint = startPointMean+winlen-step;
+startPoint = startPointTemp+winlen-step;
+%startPoint = startPoint+winlen-step;
 stateScaled = zeros(1, step*nStep);
 K1Scaled = zeros(1, step*nStep);
-K0Scaled = zeros(1, step*nStep);
+KrScaled = zeros(1, step*nStep);
 for iStep = 1:nStep
     stateScaled((1:step)+step*(iStep-1)) = ones(1, step)*states(iStep);
     K1Scaled((1:step)+step*(iStep-1)) = ones(1, step)*K1(iStep);
-    K0Scaled((1:step)+step*(iStep-1)) = ones(1, step)*K0(iStep);
     KrScaled((1:step)+step*(iStep-1)) = ones(1, step)*Kr(iStep);
 end
 states = stateScaled;
 K1 = K1Scaled;
-K0 = K0Scaled;
 Kr = KrScaled;
 
 
-tVector = time(startPointMean:startPointMean+nStep*step-1);
-endPoint = startPointMean+length(states)-1;
+tVector = time(startPoint:startPoint+nStep*step-1);
+endPoint = startPoint+length(states)-1;
 
 %cfs = [cfsPriori, cfs];
 %thrs = [zeros(1,length(cfsPriori)), thrs];
 
-
 %{
+
 % plot Frequency Band
 figure;
-subplot(3,1,1);
-%tVector = (1:length(DwithoutEdge(FrequencyBand,:)))./fs; 
+PlotStart = windowThrs;
+subplot(2,1,1);
 plot(tVector,cfs);
 xlabel('Time'); % x轴注解
 ylabel('Taget Frequency Band'); % y轴注解
 title([ frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
-%xlim([PlotStart PlotStart+10]);
-hold on
-plot(tVector,thrManuls);
-hold off;
-%xlim([PlotStart PlotStart+10]);
-legend('coefficients','minimaxi');
-%legend('coefficients','threshold','thselect','thrManul');
-
-subplot(3,1,2);
-plot(tVector,cfs);
-xlabel('Time'); % x轴注解
-ylabel('Taget Frequency Band'); % y轴注解
-title([ frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
-%xlim([PlotStart PlotStart+10]);
+xlim([PlotStart PlotStart+10]);
 hold on
 plot(tVector,thrs);
 hold off;
-%xlim([PlotStart PlotStart+10]);
-legend('coefficients','rigrsure');
+xlim([PlotStart PlotStart+10]);
+legend('coefficients','minimax');
 
-
-subplot(3,1,3);
+subplot(2,1,2);
 plot(tVector,states);
+xlim([PlotStart PlotStart+10]);
 %xlim([PlotStart PlotStart+10]);
 xlabel('Time'); % x轴注解
 ylabel('Sates'); % y轴注解
 title('Syncronization states'); % 图形标题
-%}
+
 
 figure;
-plot(tVector,K1);hold on;
-plot(tVector,K0);hold on;
-plot(tVector,Kr);
+plot(tVector,K1);
+xlim([PlotStart PlotStart+10]);hold on;
+plot(tVector,Kr);xlim([PlotStart PlotStart+10]);
 hold off;
 xlabel('Time'); % x轴注解
 ylabel('Values'); % y轴注解
-title(['Rigrsure K1 & K0 & Kr in ', frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
-legend('K1','K0','Kr');
+title(['Minimax K1 & Kr in ', frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
+legend('K1','Kr');
 
 
 figure;
-plot(tVector,sig);hold on;
-%plot(tVector,thsel);hold on;
-plot(tVector,thrMean);
-plot(tVector,thrsel);
+plot(tVector,sig);xlim([PlotStart PlotStart+10]);hold on;
+plot(tVector,thrsel);xlim([PlotStart PlotStart+10]);hold on;
+plot(tVector,thrs);xlim([PlotStart PlotStart+10]);
 hold off;
 xlabel('Time'); % x轴注解
 ylabel('Values'); % y轴注解
 title(['Sigma & Thselect in ', frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
-legend('Sigma','minimaxi','rigrsure');
+legend('Sigma','minimaxi','thrs');
 %legend('Sigma','Thselect','ThrMaunl');
 
+%}
 
 % Return results
 switch nargout
