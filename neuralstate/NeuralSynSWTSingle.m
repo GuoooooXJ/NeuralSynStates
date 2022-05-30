@@ -1,4 +1,4 @@
-function [varargout] = NeuralSynSWT(signal, fs, node, centralFreq, frequencyBandPlot, varargin)
+function [varargout] = NeuralSynSWTSingle(signal, fs, node, centralFreq ,varargin)
 %Neural Syncronization States Caculation
 %   Detect synchronization metric for LFP signal With SWT.
 %
@@ -19,16 +19,12 @@ function [varargout] = NeuralSynSWT(signal, fs, node, centralFreq, frequencyBand
 %   Modified : Dec 31, 2022
 
 basis = 'sym8';
-%step  = round(0.02 * fs);
 step  = 1;
-%step  = round(1/centralFreq * fs * 1);
-winlen = round(1/centralFreq * fs * 4);
-%windowTemp = winlen/fs;
 windowThrs = 1/centralFreq * 60;
 thrswin = round(1/centralFreq * fs * 60);
 
 % Get customized settings
-nArg = nargin - 5;
+nArg = nargin - 4;
 if mod(nArg, 2) ~= 0
     help dnsdetection
     return
@@ -89,9 +85,13 @@ end
 DwithoutEdge = swd(:,fs:end-fs);
 AwithoutEdge = swa(:,fs:end-fs);
 
+Signal = DwithoutEdge(FrequencyBand,:);
+SignalHibert  = hilbert(Signal);
+SignalEnvelop = sqrt(real(SignalHibert).^2 + imag(SignalHibert).^2);
+
 % Compute wavelet pocket coefficients for priori window
 nStepThrs = ceil(thrswin/step);
-nStepTemp = ceil((thrswin/2-winlen/2)/step);
+nStepTemp = ceil((thrswin/2-step/2)/step);
 thrs  = zeros(1, nStepThrs);
 sig   = zeros(1, nStepThrs);
 thrsel = zeros(1, nStepThrs);
@@ -102,10 +102,10 @@ thrsel = zeros(1, nStepThrs);
 startPointThrs = nStepThrs*step + 1;
 startPointTemp = nStepTemp*step + 1;
 %startPoint = nStepThrs*step + 1;
-endPoint = startPointTemp + winlen - 1;
+endPoint = startPointTemp + step - 1;
 %endPoint = startPoint + winlen - 1;
 %nStep = floor((length(DwithoutEdge(FrequencyBand,:))-(startPointThrs-1))/thrswin);
-nStep = floor((length(DwithoutEdge(FrequencyBand,:))-(startPointThrs-1)-(winlen-step))/step);
+nStep = floor((length(Signal)-(startPointThrs-1))/step);
 
 cfs = zeros(1, step*nStep);
 states = zeros(1, nStep);
@@ -123,14 +123,11 @@ for iStep = 1:nStep
     idx = (1:step)+(iStep-1)*step;
 
     % Extract coefficients
-    cfsTemp = DwithoutEdge(FrequencyBand,(startPointTemp:endPoint)+(iStep-1)*step);
-    %cfsTemp = DwithoutEdge(FrequencyBand,(startPoint:endPoint)+(iStep-1)*step);
-    cfsThrs = DwithoutEdge(FrequencyBand,(1:thrswin)+(iStep-1)*step);
-    cfs(idx) = cfsTemp(end-step+1:end);
+    cfsThrs  = Signal((1:thrswin)+(iStep-1)*step);
+    cfs(idx) = Signal((startPointTemp:endPoint)+(iStep-1)*step);
     
     % Compute threshold
     % According to the paper, Normlization before median
-
 
     % Control chart
     flag = 0;
@@ -162,15 +159,14 @@ for iStep = 1:nStep
     
     end
         
-    cfsThrsNorm = zscore(cfsThrs);
     sigma = median(abs(cfsThrs))/0.6745;
     %thrManul   = sigma * (0.3936+0.1829*log(thrswin - 2));
-    thr        = sigma * (0.3936+0.1829*log(length(cfsThrsNorm) - 2));
+    thr        = sigma * (0.3936+0.1829*log(length(cfsThrs) - 2));
     thrs(idx)  = thr;
     %thrManuls(idx) = thrManul;
     sig(idx)    = sigma;
     %thrsel(idx) = thselect(cfsThrsNorm,'minimaxi');
-    thrsel(idx) = (0.3936+0.1829*log(length(cfsThrsNorm) - 2));
+    thrsel(idx) = (0.3936+0.1829*log(length(cfsThrs) - 2));
         
     % State discriminiation
     %{
@@ -189,31 +185,21 @@ for iStep = 1:nStep
     %}
     
     % State discriminiation
-    cfsTempHilbert  = hilbert(cfsTemp);
-    cfsTempEnvelop  = sqrt(real(cfsTempHilbert).^2 + imag(cfsTempHilbert).^2);
-    %En        = cfsTempEnvelop;
-    %EnNorm    = 0.288*2*thr;
-    En        = sum(cfsTempEnvelop)*(1/fs);
-    EnNorm    = 0.288*2*thr*winlen*(1/fs);
+    En        = SignalEnvelop((startPointTemp:endPoint)+(iStep-1)*step);
+    EnNorm    = 0.288*2*thr;
     
     Synstate = En/EnNorm;
     
-    states(iStep) = 1-exp(-Synstate);
-    K1(iStep) = En;
-    Kr(iStep) = EnNorm;
-    
-    %{
     states(idx) = 1-exp(-Synstate);
     K1(idx) = En;
     Kr(idx) = EnNorm;
-    %}
    
     % Update progress bar
     cont = cont+1;
     pro = progress(pro, cont);
 end
 
-startPoint = startPointTemp+winlen-step;
+startPoint = startPointTemp;
 %startPoint = startPoint+winlen-step;
 
 
@@ -246,8 +232,8 @@ statesRe = resample(statesRe, fs, 1/0.02);
 statesRe = statesRe(1:length(states));
 %}
 
-%{
 
+%{
 % plot Frequency Band
 figure;
 PlotStart = windowThrs/2;
@@ -262,8 +248,7 @@ hold on
 plot(tVector,thrs);
 hold off;
 xlim([PlotStart PlotStart+10]);
-legend('coefficients','minimax');
-
+legend('频段系数','minimax阈值');
 subplot(2,1,2);
 %plot(tVector,statesRe);
 plot(tVector,states);
@@ -271,7 +256,7 @@ xlim([PlotStart PlotStart+10]);
 %xlim([PlotStart PlotStart+10]);
 xlabel('Time'); % x轴注解
 ylabel('Sates'); % y轴注解
-title('Syncronization states'); % 图形标题
+title('同步化状态'); % 图形标题
 
 
 figure;
@@ -281,8 +266,8 @@ plot(tVector,Kr);xlim([PlotStart PlotStart+10]);
 hold off;
 xlabel('Time'); % x轴注解
 ylabel('Values'); % y轴注解
-title(['Minimax K1 & Kr in ', frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
-legend('K1','Kr');
+title(['信号能量和随机活动能量 ', frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
+legend('信号能量','随机活动能量');
 
 
 figure;
@@ -292,8 +277,8 @@ plot(tVector,thrs);xlim([PlotStart PlotStart+10]);
 hold off;
 xlabel('Time'); % x轴注解
 ylabel('Values'); % y轴注解
-title(['Sigma & Thselect in ', frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
-legend('Sigma','minimaxi','thrs');
+title(['噪声方差 & 阈值 in ', frequencyBandPlot,' window = ',num2str(windowThrs),'s']); % 图形标题
+legend('噪声方差','minimaxi阈值','总阈值');
 %legend('Sigma','Thselect','ThrMaunl');
 %}
 

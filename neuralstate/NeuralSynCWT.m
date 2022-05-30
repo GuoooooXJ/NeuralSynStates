@@ -19,7 +19,7 @@ function [varargout] = NeuralSynCWT(signal, fs,  varargin)
 %   Modified : Dec 31, 2022
 
 basis = 'amor';
-step  = round(0.02 * fs);
+step  = 1;
 
 % Get customized settings
 nArg = nargin - 2;
@@ -43,23 +43,28 @@ pro = progress('Neural State', N);
 [wt,f] = cwt(signal,basis,fs);
 figure;
 pcolor(time,f,abs(wt));shading interp;
-title('CWT on PAGdata');
+title('CWT on data');
 
-
+% 2hz以上
 % Remove the points before and after to exclude edge effects
-WTwithoutEdge = wt(:,fs:end-fs);
+index = find(f>2);
+WTwithoutEdge = wt(index,fs:end-fs);
+frequency = f(index);
 
-[FrequencyNumber,n] = size(WTwithoutEdge);
-WTwithoutEdgeNew = WTwithoutEdge(1:round(FrequencyNumber/2),:);
-frequency = f(1:round(FrequencyNumber/2));
-[FrequencyNumber,n] = size(WTwithoutEdgeNew);
+% 90hz以下
+index = find(frequency<90);
+WTwithoutEdge = WTwithoutEdge(index,:);
+frequency = frequency(index);
+
 
 centralFreq = round(frequency(end));
-winlen = round(1/centralFreq * fs * 4);
 thrswin = round(1/centralFreq * fs * 60);
 
+[FrequencyNumber,n] = size(WTwithoutEdge);
+
 % Compute wavelet pocket coefficients for priori window
-nStepThrs = ceil((thrswin-(winlen-step))/step);
+nStepThrs = ceil(thrswin/step);
+nStepTemp = ceil((thrswin/2)/step);
 thrs  = zeros(FrequencyNumber, nStepThrs);
 sig   = zeros(FrequencyNumber, nStepThrs);
 thrsel = zeros(FrequencyNumber, nStepThrs);
@@ -68,29 +73,38 @@ thrsel = zeros(FrequencyNumber, nStepThrs);
 
 
 % Detect synchronization state
-startPoint = nStepThrs*step + 1;
-nStep = floor((length(WTwithoutEdgeNew(1,:))-(startPoint-1)-(winlen-step))/step);
+%nStep = floor((length(WTwithoutEdgeNew(1,:))-(startPoint-1)-(winlen-step))/step);
+
+startPointThrs = nStepThrs*step + 1;
+startPointTemp = nStepTemp*step + 1;
+%startPoint = nStepThrs*step + 1;
+endPoint = startPointTemp + step - 1;
+%endPoint = startPoint + winlen - 1;
+nStep = floor((length(WTwithoutEdge(1,:))-(startPointThrs-1))/step);
+%nStep = floor((length(DwithoutEdge(FrequencyBand,:))-(startPoint-1)-(winlen-step))/step);
+
 
 cfs = zeros(FrequencyNumber, step*nStep);
 states = zeros(FrequencyNumber, nStep);
-K1 = zeros(FrequencyNumber, nStep);
-Kr = zeros(FrequencyNumber, nStep);
+Esig = zeros(FrequencyNumber, nStep);
+Eback = zeros(FrequencyNumber, nStep);
 
 for frequencyBand = 1:FrequencyNumber-1
 
 centralFreq = round(f(frequencyBand));
-winlenCurrent = round(1/centralFreq * fs * 4);
 thrswinCurrent = round(1/centralFreq * fs * 60);
-thrswinlen = thrswinCurrent/fs;
+
+Signal = WTwithoutEdge(frequencyBand,:);
+SignalHibert  = hilbert(Signal);
+SignalEnvelop = sqrt(real(SignalHibert).^2 + imag(SignalHibert).^2);
     
 for iStep = 1:nStep
     
     idx = (1:step)+(iStep-1)*step;
 
     % Extract coefficients
-    cfsTempCurrent  = WTwithoutEdgeNew(frequencyBand,(startPoint:startPoint + winlenCurrent - 1)+(iStep-1)*step);
-    cfsThrsCurrent  = WTwithoutEdgeNew(frequencyBand,(startPoint-thrswinCurrent:startPoint)+(iStep-1)*step);
-    cfs(frequencyBand,idx) = cfsTempCurrent(end-step+1:end);
+    cfsThrs  = Signal((1:thrswinCurrent)+(iStep-1)*step);
+    cfs(frequencyBand,idx) = Signal((startPointTemp:endPoint)+(iStep-1)*step);
     
     % Compute threshold
     % According to the paper, Normlization before median
@@ -100,9 +114,9 @@ for iStep = 1:nStep
     ControlChartNumber = 0;
     while(flag == 0)
     ControlChartNumber = ControlChartNumber+1;
-    meancfsThrs  = mean(cfsThrsCurrent);
-    sigmacfsThrs = std(cfsThrsCurrent);
-    cfsThrsNew = cfsThrsCurrent(cfsThrsCurrent<meancfsThrs+2.58*sigmacfsThrs & cfsThrsCurrent>meancfsThrs-2.58*sigmacfsThrs);
+    meancfsThrs  = mean(cfsThrs);
+    sigmacfsThrs = std(cfsThrs);
+    cfsThrsNew = cfsThrs(cfsThrs<meancfsThrs+2.58*sigmacfsThrs & cfsThrs>meancfsThrs-2.58*sigmacfsThrs);
         % 1%-2.58 2%-2.33
         %{
         tVectorPlot = (1:length(cfsThrs))./fs;
@@ -116,35 +130,31 @@ for iStep = 1:nStep
         title(['Before And After Control Chart in Progress ',num2str(ControlChartNumber),'time']); % 图形标题
         legend('Before','After');
         %}
-    if length(cfsThrsNew) == length(cfsThrsCurrent)
-        cfsThrsCurrent = cfsThrsNew;
+    if length(cfsThrsNew) == length(cfsThrs)
+        cfsThrs = cfsThrsNew;
         flag = 1;
     else
-        cfsThrsCurrent = cfsThrsNew;
+        cfsThrs = cfsThrsNew;
     end
     
     end
-    
-    cfsThrsNorm = zscore(cfsThrsCurrent);
-    sigma = median(abs(cfsThrsCurrent))/0.6745;
-    thr   = sigma * (0.3936+0.1829*log(length(cfsThrsNorm) - 2));
-    thrs(frequencyBand,idx)   = sigma * (0.3936+0.1829*log(length(cfsThrsNorm) - 2));
+
+    sigma = median(abs(cfsThrs))/0.6745;
+    thr   = sigma * (0.3936+0.1829*log(length(cfsThrs) - 2));
+    thrs(frequencyBand,idx)   = sigma * (0.3936+0.1829*log(length(cfsThrs) - 2));
     sig(frequencyBand,idx)    = sigma;
-    thrsel(frequencyBand,idx) = (0.3936+0.1829*log(length(cfsThrsNorm) - 2));
+    thrsel(frequencyBand,idx) = (0.3936+0.1829*log(length(cfsThrs) - 2));
     %thrCal(idx) = (0.3936+0.1829*log(thrswin - 2));
         
     % State discriminiation
-    cfsTempHilbert  = hilbert(cfsTempCurrent);
-    cfsTempEnvelop  = sqrt(real(cfsTempHilbert).^2 + imag(cfsTempHilbert).^2);
-    En        = sum(cfsTempEnvelop*(1/fs));
-    RandomSig = rand(size(cfsThrsCurrent))*2*thr-thr;
-    EnRandom  = sum(abs(RandomSig).^2*(1/fs))/thrswinlen;
+    En        = SignalEnvelop((startPointTemp:endPoint)+(iStep-1)*step);
+    EnNorm    = 0.288*2*thr;
     
     
-    Synstate = En/EnRandom;
-    states(frequencyBand,iStep) = 1-exp(-Synstate);
-    K1(frequencyBand,iStep) = En;
-    Kr(frequencyBand,iStep) = EnRandom;
+    Synstate = En/EnNorm;
+    states(frequencyBand,idx) = 1-exp(-Synstate);
+    Esig(frequencyBand,idx) = En;
+    Erandom(frequencyBand,idx) = EnNorm;
     
 end
         
@@ -156,31 +166,31 @@ end
     %}
 end
 
-
+%{
 % Scale state arrary
-startPoint = startPoint+winlen-step;
+startPoint = startPointTemp;
 stateScaled = zeros(FrequencyNumber, step*nStep);
-K1Scaled = zeros(FrequencyNumber, step*nStep);
-KrScaled = zeros(FrequencyNumber, step*nStep);
+EsigScaled = zeros(FrequencyNumber, step*nStep);
+ErandomScaled = zeros(FrequencyNumber, step*nStep);
 for frequencyBand = 1:FrequencyNumber
 	for iStep = 1:nStep
         stateScaled(frequencyBand,(1:step)+step*(iStep-1)) = ones(1, step)*states(frequencyBand,iStep);
-        K1Scaled(frequencyBand,(1:step)+step*(iStep-1)) = ones(1, step)*K1(frequencyBand,iStep);
-        KrScaled(frequencyBand,(1:step)+step*(iStep-1)) = ones(1, step)*Kr(frequencyBand,iStep);
+        EsigScaled(frequencyBand,(1:step)+step*(iStep-1)) = ones(1, step)*Esig(frequencyBand,iStep);
+        ErandomScaled(frequencyBand,(1:step)+step*(iStep-1)) = ones(1, step)*Erandom(frequencyBand,iStep);
     end
 end
 states = stateScaled;
-K1 = K1Scaled;
-Kr = KrScaled;
+Esig = EsigScaled;
+Erandom = ErandomScaled;
+%}
 
-
-tVector = time(startPoint:startPoint+nStep*step-1);
+tVector = time(startPointTemp:startPointTemp+nStep*step-1);
 
 %cfs = [cfsPriori, cfs];
 %thrs = [zeros(1,length(cfsPriori)), thrs];
 
 
-
+%{
 % plot Frequency Band
 figure;
 subplot(2,1,1);
@@ -206,16 +216,16 @@ title('Syncronization states'); % 图形标题
 
 
 figure;
-plot(tVector,K1(30,:));
+plot(tVector,Esig(30,:));
 hold on;
-plot(tVector,Kr(30,:));
+plot(tVector,Erandom(30,:));
 hold off;
 %xlim([PlotStart PlotStart+10]);
 xlabel('Time'); % x轴注解
 ylabel('Values'); % y轴注解
-title(['K1 & Kr frequency = ',num2str(round(frequency(30))),'hz']); % 图形标题
-legend('K1','Kr');
-
+title(['Etotal & Erandom frequency = ',num2str(round(frequency(30))),'hz']); % 图形标题
+legend('Etotal','Erandom');
+%}
 
 figure;
 pcolor(tVector,frequency,states);shading interp;
@@ -225,15 +235,15 @@ ylabel('Frequency'); % y轴注解
 
 
 figure;
-pcolor(tVector,frequency,K1);shading interp;
-title('K1 Minimaxi '); % 图形标题
+pcolor(tVector,frequency,Esig);shading interp;
+title('E signal Minimaxi '); % 图形标题
 xlabel('Time'); % x轴注解
 ylabel('Frequency'); % y轴注解
 
 
 figure;
-pcolor(tVector,frequency,Kr);shading interp;
-title('K0 Minimaxi '); % 图形标题
+pcolor(tVector,frequency,Eback);shading interp;
+title('E random activity Minimaxi '); % 图形标题
 xlabel('Time'); % x轴注解
 ylabel('Frequency'); % y轴注解
 
