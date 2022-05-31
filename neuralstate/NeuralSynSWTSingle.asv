@@ -278,7 +278,7 @@ plot(tVector,thrs);xlim([PlotStart PlotStart+10]);
 hold off;
 xlabel('Time'); % x轴注解
 ylabel('Values'); % y轴注解
-title(['噪声方差 & 阈值 in ', num2str(startFreq) , 'hz -' , num2str(endFreq),'hz window = ',num2str(windowThrs),'s']); % 图形标题
+title(['噪声方差 & 阈值 in ', num2str(startFreq) , 'hz -' + num2str(endFreq),'hz  window = ',num2str(windowThrs),'s']); % 图形标题
 legend('噪声方差','minimaxi阈值','总阈值');
 %legend('Sigma','Thselect','ThrMaunl');
 
